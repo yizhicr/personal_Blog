@@ -1,0 +1,95 @@
+# Created at the root of the project
+
+# Dependencies
+node_modules/
+target/
+
+# IDE files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+dist/
+build/
+.nyc_output
+coverage/
+
+# Environment specific
+.env*
+!.env.example
+.local
+.settings/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Temporary folders
+tmp/
+temp/
+
+# Documentation
+docs/api/* # exclude swagger api docs
+!docs/api/.gitkeep
+
+# Maven
+Backend/.mvn
+Backend/target/
+
+# Backend logs
+Backend/logs/
+Backend/*.log
+
+# Backend temp files
+Backend/tmp/
+Backend/temp/
+
+# Frontend
+Frontend/node_modules/
+Frontend/dist/
+Frontend/.vite/
+Frontend/.nuxt/
+
+# Frontend logs
+Frontend/logs/
+Frontend/*.log
+
+# Frontend coverage
+Frontend/coverage/
+Frontend/.nyc_output
+
+# System files
+Frontend/.DS_Store
+Backend/.DS_Store
+
+# Jupyter notebook
+*.ipynb
+*.ipynb_checkpoints/
+
+# Temporary files
+[.*
