@@ -23,7 +23,7 @@ public class CategoryService {
     private static final long CATEGORY_CACHE_EXPIRE = 24 * 60 * 60; // 24小时
     
     public List<Category> getAllCategories() {
-        List<Category> categories = (List<Category>) redisService.get(CATEGORIES_ALL_KEY);
+        List<Category> categories = redisService.getList(CATEGORIES_ALL_KEY, Category.class);
         if (categories != null) {
             return categories;
         }
@@ -35,7 +35,7 @@ public class CategoryService {
     
     public Optional<Category> getCategoryById(Long id) {
         String cacheKey = CATEGORY_CACHE_KEY + id;
-        Category category = (Category) redisService.get(cacheKey);
+        Category category = redisService.get(cacheKey, Category.class);
         if (category != null) {
             return Optional.of(category);
         }

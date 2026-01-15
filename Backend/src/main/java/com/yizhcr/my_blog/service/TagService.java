@@ -24,7 +24,7 @@ public class TagService {
     private static final long TAG_CACHE_EXPIRE = 24 * 60 * 60;
     
     public List<Tag> getAllTags() {
-        List<Tag> tags = (List<Tag>) redisService.get(TAGS_ALL_KEY);
+        List<Tag> tags = redisService.getList(TAGS_ALL_KEY, Tag.class);
         if (tags != null) {
             return tags;
         }
@@ -36,7 +36,7 @@ public class TagService {
     
     public List<Tag> getHotTags(int limit) {
         String cacheKey = HOT_TAGS_KEY + limit;
-        List<Tag> tags = (List<Tag>) redisService.get(cacheKey);
+        List<Tag> tags = redisService.getList(cacheKey, Tag.class);
         if (tags != null) {
             return tags;
         }

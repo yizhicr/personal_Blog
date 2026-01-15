@@ -21,15 +21,15 @@ public class RedisTestController {
         Map<String, Object> response = new HashMap<>();
         try {
             // 测试设置值
-            redisService.set("testKey", "Hello Memory Cache");
+            redisService.set("testKey", "Hello Redis!");
             // 获取值
-            String value = (String) redisService.get("testKey");
+            String value = (String) redisService.get("testKey", String.class);
             response.put("success", true);
-            response.put("message", "内存缓存连接成功");
+            response.put("message", "Redis连接成功");
             response.put("value", value);
         } catch (Exception e) {
             response.put("success", false);
-            response.put("message", "内存缓存连接失败: " + e.getMessage());
+            response.put("message", "Redis连接失败: " + e.getMessage());
             e.printStackTrace();
         }
         return response;
@@ -44,7 +44,7 @@ public class RedisTestController {
             String testValue = "test_value";
             
             // 1. 测试写入
-            boolean setResult = redisService.set(testKey, testValue, 60); // 60秒过期
+            boolean setResult = redisService.set(testKey, testValue, 60L); // 60秒过期
             if (!setResult) {
                 response.put("success", false);
                 response.put("message", "缓存 SET操作失败");
@@ -52,7 +52,7 @@ public class RedisTestController {
             }
             
             // 2. 测试读取
-            Object getValue = redisService.get(testKey);
+            Object getValue = redisService.get(testKey, String.class);
             if (getValue == null || !getValue.equals(testValue)) {
                 response.put("success", false);
                 response.put("message", "缓存 GET操作失败或值不匹配");
@@ -69,7 +69,7 @@ public class RedisTestController {
             
             // 4. 测试删除
             redisService.del(testKey);
-            Object valueAfterDel = redisService.get(testKey);
+            Object valueAfterDel = redisService.get(testKey, String.class);
             if (valueAfterDel != null) {
                 response.put("success", false);
                 response.put("message", "缓存 DEL操作失败");
@@ -77,7 +77,7 @@ public class RedisTestController {
             }
             
             response.put("success", true);
-            response.put("message", "所有缓存操作测试通过");
+            response.put("message", "所有Redis操作测试通过");
             response.put("details", Map.of(
                 "set_operation", "success",
                 "get_operation", "success", 
@@ -86,7 +86,7 @@ public class RedisTestController {
             ));
         } catch (Exception e) {
             response.put("success", false);
-            response.put("message", "缓存详细测试失败: " + e.getMessage());
+            response.put("message", "Redis详细测试失败: " + e.getMessage());
             e.printStackTrace();
         }
         return response;
@@ -101,7 +101,7 @@ public class RedisTestController {
             response.put("success", true);
             response.put("message", "Redis连接信息获取成功");
             response.put("ping_result", pingResult);
-            response.put("host", "127.0.0.1");
+            response.put("host", "localhost");
             response.put("port", 6451);
             response.put("status", "configured");
         } catch (Exception e) {
@@ -118,11 +118,11 @@ public class RedisTestController {
         try {
             String pingResult = redisService.ping();
             response.put("status", "UP");
-            response.put("message", "内存缓存正常");
+            response.put("message", "Redis正常");
             response.put("ping_result", pingResult);
         } catch (Exception e) {
             response.put("status", "DOWN");
-            response.put("message", "内存缓存异常: " + e.getMessage());
+            response.put("message", "Redis异常: " + e.getMessage());
             response.put("error_type", e.getClass().getSimpleName());
             response.put("error_message", e.getMessage());
         }
@@ -138,10 +138,10 @@ public class RedisTestController {
             response.put("cache_service", RedisService.class.getSimpleName());
             response.put("ping_result", pingResult);
             response.put("status", "UP");
-            response.put("message", "内存缓存调试信息获取成功");
+            response.put("message", "Redis调试信息获取成功");
         } catch (Exception e) {
             response.put("status", "DOWN");
-            response.put("message", "内存缓存调试失败: " + e.getMessage());
+            response.put("message", "Redis调试失败: " + e.getMessage());
             response.put("error_type", e.getClass().getSimpleName());
             response.put("error_message", e.getMessage());
             
@@ -151,6 +151,45 @@ public class RedisTestController {
             }
         }
         
+        return response;
+    }
+    
+    @GetMapping("/redis/cache-performance")
+    public Map<String, Object> cachePerformanceTest() {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            // 性能测试：批量写入和读取
+            int testSize = 1000;
+            long startTime = System.currentTimeMillis();
+            
+            // 批量写入
+            for (int i = 0; i < testSize; i++) {
+                redisService.set("perf_test_key_" + i, "value_" + i, 300L);
+            }
+            long writeEndTime = System.currentTimeMillis();
+            
+            // 批量读取
+            int hits = 0;
+            for (int i = 0; i < testSize; i++) {
+                String value = redisService.get("perf_test_key_" + i, String.class);
+                if (value != null) {
+                    hits++;
+                }
+            }
+            long readEndTime = System.currentTimeMillis();
+            
+            response.put("success", true);
+            response.put("message", "缓存性能测试完成");
+            response.put("write_time_ms", writeEndTime - startTime);
+            response.put("read_time_ms", readEndTime - writeEndTime);
+            response.put("total_items", testSize);
+            response.put("hits", hits);
+            response.put("hit_rate", String.format("%.2f%%", (double) hits / testSize * 100));
+        } catch (Exception e) {
+            response.put("success", false);
+            response.put("message", "缓存性能测试失败: " + e.getMessage());
+            e.printStackTrace();
+        }
         return response;
     }
 }

@@ -1,46 +1,27 @@
 package com.yizhcr.my_blog.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
 public class RedisService {
 
-    // 使用ConcurrentHashMap作为内存缓存
-    private final Map<String, CachedObject> cache = new ConcurrentHashMap<>();
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
 
-    // 内部类，用于存储值及其过期时间
-    private static class CachedObject {
-        final Object value;
-        final long expirationTime;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
-        CachedObject(Object value, long expirationTime) {
-            this.value = value;
-            this.expirationTime = expirationTime;
-        }
-    }
-
-    /**
-     * 测试缓存连接是否正常
-     * @return 返回"PONG"表示正常
-     */
-    public String ping() {
-        try {
-            set("ping_test", "pong", 60);
-            String result = (String) get("ping_test");
-            del("ping_test");
-            return result != null && result.equals("pong") ? "PONG" : "ERROR";
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "ERROR: " + e.getMessage();
-        }
-    }
+    @Autowired
+    private ObjectMapper objectMapper;
 
     // ============================= Common =============================
 
@@ -49,22 +30,9 @@ public class RedisService {
      */
     public void deleteByPattern(String pattern) {
         try {
-            // 转义特殊字符并替换*为.*
-            String regex = pattern.replace(".", "\\.")
-                                  .replace("*", ".*")
-                                  .replace("?", ".");
-            Set<String> keys = new HashSet<>();
-            
-            for (String key : cache.keySet()) {
-                if (key.matches(regex)) {
-                    keys.add(key);
-                }
-            }
-            
+            Set<String> keys = redisTemplate.keys(pattern);
             if (!CollectionUtils.isEmpty(keys)) {
-                for (String key : keys) {
-                    cache.remove(key);
-                }
+                redisTemplate.delete(keys);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -72,14 +40,100 @@ public class RedisService {
     }
 
     /**
-     * 设置缓存过期时间
+     * 写入缓存
      */
-    public boolean expire(String key, long time) {
+    public Boolean set(String key, Object value, Long timeOut) {
         try {
-            CachedObject obj = cache.get(key);
-            if (obj != null && time > 0) {
-                cache.put(key, new CachedObject(obj.value, System.currentTimeMillis() + time * 1000));
+            redisTemplate.opsForValue().set(key, value, timeOut, TimeUnit.SECONDS);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    /**
+     * 写入缓存（使用默认超时）
+     */
+    public Boolean set(String key, Object value) {
+        return set(key, value, 300L); // 默认5分钟过期
+    }
+
+    /**
+     * 读取缓存
+     */
+    public <T> T get(String key, Class<T> clazz) {
+        try {
+            Object obj = redisTemplate.opsForValue().get(key);
+            if (obj != null) {
+                // 如果对象已经是目标类型，直接返回
+                if (clazz.isInstance(obj)) {
+                    return clazz.cast(obj);
+                }
+                // 否则尝试序列化转换
+                String json = objectMapper.writeValueAsString(obj);
+                return objectMapper.readValue(json, clazz);
             }
+            return null;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * 读取缓存（泛型列表）
+     */
+    public <T> List<T> getList(String key, Class<T> clazz) {
+        try {
+            Object obj = redisTemplate.opsForValue().get(key);
+            if (obj != null) {
+                // 如果对象已经是列表类型，尝试转换元素
+                if (obj instanceof List) {
+                    List<?> rawList = (List<?>) obj;
+                    if (!rawList.isEmpty()) {
+                        // 如果第一个元素已经是目标类型，直接返回
+                        if (clazz.isInstance(rawList.get(0))) {
+                            return (List<T>) rawList;
+                        } else {
+                            // 如果是Map类型的元素，则需要手动转换
+                            List<T> convertedList = new ArrayList<>();
+                            for (Object item : rawList) {
+                                if (item instanceof Map) {
+                                    // 将Map转换为目标类型
+                                    String json = objectMapper.writeValueAsString(item);
+                                    T convertedItem = objectMapper.readValue(json, clazz);
+                                    convertedList.add(convertedItem);
+                                } else {
+                                    // 其他类型尝试直接转换
+                                    String json = objectMapper.writeValueAsString(item);
+                                    T convertedItem = objectMapper.readValue(json, clazz);
+                                    convertedList.add(convertedItem);
+                                }
+                            }
+                            return convertedList;
+                        }
+                    }
+                }
+                
+                // 否则通过JSON序列化转换
+                String json = objectMapper.writeValueAsString(obj);
+                TypeReference<List<T>> typeRef = new TypeReference<List<T>>() {};
+                return objectMapper.readValue(json, typeRef);
+            }
+            return new ArrayList<>();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 删除key
+     */
+    public Boolean del(String key) {
+        try {
+            redisTemplate.delete(key);
             return true;
         } catch (Exception e) {
             e.printStackTrace();
@@ -90,37 +144,34 @@ public class RedisService {
     /**
      * 获取过期时间
      */
-    public long getExpire(String key) {
-        CachedObject obj = cache.get(key);
-        if (obj == null) {
-            return -1;
+    public Long getExpire(String key) {
+        try {
+            return redisTemplate.getExpire(key, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return -1L;
         }
-        
-        long currentTime = System.currentTimeMillis();
-        if (obj.expirationTime < currentTime) {
-            // 已经过期，应该删除
-            cache.remove(key);
-            return -2;
-        }
-        
-        return (obj.expirationTime - currentTime) / 1000;
     }
 
     /**
-     * 判断key是否存在
+     * Ping Redis服务器
      */
-    public boolean hasKey(String key) {
+    public String ping() {
         try {
-            CachedObject obj = cache.get(key);
-            if (obj != null) {
-                if (System.currentTimeMillis() > obj.expirationTime) {
-                    // 已过期，删除它
-                    cache.remove(key);
-                    return false;
-                }
-                return true;
-            }
-            return false;
+            stringRedisTemplate.opsForValue().set("ping_key", "PONG", 60, TimeUnit.SECONDS);
+            return stringRedisTemplate.opsForValue().get("ping_key");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 检查key是否存在
+     */
+    public Boolean exists(String key) {
+        try {
+            return redisTemplate.hasKey(key);
         } catch (Exception e) {
             e.printStackTrace();
             return false;
@@ -128,51 +179,35 @@ public class RedisService {
     }
 
     /**
-     * 删除缓存（支持通配符）
+     * 设置过期时间
      */
-    public void del(String... keys) {
-        if (keys == null || keys.length == 0) {
-            return;
-        }
-
+    public Boolean expire(String key, long timeout) {
         try {
-            for (String key : keys) {
-                if (key.contains("*") || key.contains("?")) {
-                    // 包含通配符，使用模式匹配
-                    deleteByPattern(key);
-                } else {
-                    cache.remove(key);
-                }
-            }
+            return redisTemplate.expire(key, timeout, TimeUnit.SECONDS);
         } catch (Exception e) {
             e.printStackTrace();
+            return false;
         }
     }
 
     /**
-     * 普通缓存获取
+     * 获取字符串值
      */
-    public Object get(String key) {
-        CachedObject obj = cache.get(key);
-        if (obj == null) {
-            return null;
-        }
-
-        if (System.currentTimeMillis() > obj.expirationTime) {
-            // 已过期，删除它
-            cache.remove(key);
-            return null;
-        }
-
-        return obj.value;
-    }
-
-    /**
-     * 普通缓存放入
-     */
-    public boolean set(String key, Object value) {
+    public String getString(String key) {
         try {
-            cache.put(key, new CachedObject(value, Long.MAX_VALUE)); // Long.MAX_VALUE 表示永不过期
+            return (String) stringRedisTemplate.opsForValue().get(key);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * 设置字符串值
+     */
+    public Boolean setString(String key, String value, Long timeOut) {
+        try {
+            stringRedisTemplate.opsForValue().set(key, value, timeOut, TimeUnit.SECONDS);
             return true;
         } catch (Exception e) {
             e.printStackTrace();
@@ -181,16 +216,12 @@ public class RedisService {
     }
 
     /**
-     * 普通缓存放入并设置时间
+     * 判断成员是否存在于集合中
      */
-    public boolean set(String key, Object value, long time) {
+    public Boolean isMember(String key, Object value) {
         try {
-            if (time > 0) {
-                cache.put(key, new CachedObject(value, System.currentTimeMillis() + time * 1000));
-            } else {
-                set(key, value);
-            }
-            return true;
+            Boolean isMember = redisTemplate.opsForSet().isMember(key, value);
+            return isMember != null ? isMember : false;
         } catch (Exception e) {
             e.printStackTrace();
             return false;
@@ -204,21 +235,10 @@ public class RedisService {
         if (delta < 0) {
             throw new RuntimeException("递增因子必须大于0");
         }
-        
-        lock.writeLock().lock();
-        try {
-            Object currentValue = get(key);
-            if (currentValue == null) {
-                set(key, delta);
-                return delta;
-            }
-            
-            long newValue = (Long) currentValue + delta;
-            set(key, newValue);
-            return newValue;
-        } finally {
-            lock.writeLock().unlock();
+        if (redisTemplate == null) {
+            return 0;
         }
+        return redisTemplate.opsForValue().increment(key, delta);
     }
 
     /**
@@ -228,20 +248,10 @@ public class RedisService {
         if (delta < 0) {
             throw new RuntimeException("递减因子必须大于0");
         }
-        
-        lock.writeLock().lock();
-        try {
-            Object currentValue = get(key);
-            if (currentValue == null) {
-                throw new RuntimeException("不存在的键");
-            }
-            
-            long newValue = (Long) currentValue - delta;
-            set(key, newValue);
-            return newValue;
-        } finally {
-            lock.writeLock().unlock();
+        if (redisTemplate == null) {
+            return 0;
         }
+        return redisTemplate.opsForValue().increment(key, -delta);
     }
 
     // ============================= Hash =============================
@@ -250,75 +260,110 @@ public class RedisService {
      * HashGet
      */
     public Object hget(String key, String item) {
-        Map<Object, Object> map = (Map<Object, Object>) get(key);
-        return map != null ? map.get(item) : null;
+        if (redisTemplate == null) {
+            return null;
+        }
+        return redisTemplate.opsForHash().get(key, item);
     }
 
     /**
      * 获取hashKey对应的所有键值
      */
     public Map<Object, Object> hmget(String key) {
-        return (Map<Object, Object>) get(key);
+        if (redisTemplate == null) {
+            return new HashMap<>();
+        }
+        return redisTemplate.opsForHash().entries(key);
     }
 
     /**
      * HashSet
      */
     public boolean hmset(String key, Map<Object, Object> map) {
-        return set(key, map);
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForHash().putAll(key, map);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * HashSet 并设置过期时间
      */
     public boolean hmset(String key, Map<Object, Object> map, long time) {
-        return set(key, map, time);
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForHash().putAll(key, map);
+            if (time > 0) {
+                redisTemplate.expire(key, time, TimeUnit.SECONDS);
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 向一张hash表中放入数据,如果不存在将创建
      */
     public boolean hset(String key, String item, Object value) {
-        Map<Object, Object> map = (Map<Object, Object>) get(key);
-        if (map == null) {
-            map = new HashMap<>();
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForHash().put(key, item, value);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
-        map.put(item, value);
-        return set(key, map);
     }
 
     /**
      * 向一张hash表中放入数据,如果不存在将创建并设置过期时间
      */
     public boolean hset(String key, String item, Object value, long time) {
-        Map<Object, Object> map = (Map<Object, Object>) get(key);
-        if (map == null) {
-            map = new HashMap<>();
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForHash().put(key, item, value);
+            if (time > 0) {
+                redisTemplate.expire(key, time, TimeUnit.SECONDS);
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
-        map.put(item, value);
-        return set(key, map, time);
     }
 
     /**
      * 删除hash表中的值
      */
     public void hdel(String key, Object... items) {
-        Map<Object, Object> map = (Map<Object, Object>) get(key);
-        if (map != null) {
-            for (Object item : items) {
-                map.remove(item);
-            }
-            // 重新设置更新后的map
-            set(key, map);
+        if (redisTemplate == null) {
+            return;
         }
+        redisTemplate.opsForHash().delete(key, items);
     }
 
     /**
      * 判断hash表中是否有该键的值
      */
     public boolean hHasKey(String key, String item) {
-        Map<Object, Object> map = (Map<Object, Object>) get(key);
-        return map != null && map.containsKey(item);
+        if (redisTemplate == null) {
+            return false;
+        }
+        return redisTemplate.opsForHash().hasKey(key, item);
     }
 
     /**
@@ -328,29 +373,10 @@ public class RedisService {
         if (delta < 0) {
             throw new RuntimeException("递增因子必须大于0");
         }
-        
-        lock.writeLock().lock();
-        try {
-            Map<Object, Object> map = (Map<Object, Object>) get(key);
-            if (map == null) {
-                map = new HashMap<>();
-            }
-            
-            Object currentValue = map.get(item);
-            double newValue;
-            if (currentValue != null) {
-                // 确保值是数字类型
-                newValue = ((Number) currentValue).doubleValue() + delta;
-            } else {
-                newValue = delta; // 如果不存在，从 delta 开始
-            }
-            
-            map.put(item, newValue);
-            set(key, map); // 更新整个 map
-            return newValue;
-        } finally {
-            lock.writeLock().unlock();
+        if (redisTemplate == null) {
+            return 0;
         }
+        return redisTemplate.opsForHash().increment(key, item, delta);
     }
 
     /**
@@ -369,59 +395,98 @@ public class RedisService {
      * 根据key获取Set中的所有value
      */
     public Set<Object> sGet(String key) {
-        return (Set<Object>) get(key);
+        try {
+            if (redisTemplate == null) {
+                return new HashSet<>();
+            }
+            return redisTemplate.opsForSet().members(key);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
     }
 
     /**
      * 将数据放入set缓存
      */
     public boolean sSet(String key, Object... values) {
-        return set(key, new HashSet<>(Arrays.asList(values)));
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForSet().add(key, values);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 将set数据放入缓存并设置过期时间
      */
     public boolean sSet(String key, long time, Object... values) {
-        boolean result = set(key, new HashSet<>(Arrays.asList(values)), time);
-        return result;
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForSet().add(key, values);
+            if (time > 0) {
+                redisTemplate.expire(key, time, TimeUnit.SECONDS);
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 判断set中是否有该值
      */
     public boolean sHasKey(String key, Object value) {
-        Set<Object> set = (Set<Object>) get(key);
-        return set != null && set.contains(value);
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            Boolean hasKey = redisTemplate.opsForSet().isMember(key, value);
+            return hasKey != null && hasKey;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 获取set缓存的长度
      */
     public long sGetSetSize(String key) {
-        Set<Object> set = (Set<Object>) get(key);
-        return set == null ? 0 : set.size();
+        try {
+            if (redisTemplate == null) {
+                return 0;
+            }
+            Long size = redisTemplate.opsForSet().size(key);
+            return size == null ? 0 : size;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0;
+        }
     }
 
     /**
      * 移除值为value的set
      */
     public long setRemove(String key, Object... values) {
-        Set<Object> set = (Set<Object>) get(key);
-        if (set == null) {
+        try {
+            if (redisTemplate == null) {
+                return 0;
+            }
+            Long count = redisTemplate.opsForSet().remove(key, values);
+            return count == null ? 0 : count;
+        } catch (Exception e) {
+            e.printStackTrace();
             return 0;
         }
-        
-        long count = 0;
-        for (Object value : values) {
-            if (set.remove(value)) {
-                count++;
-            }
-        }
-        
-        // 重新设置更新后的set
-        set(key, set);
-        return count;
     }
 
     // ============================= List =============================
@@ -430,90 +495,132 @@ public class RedisService {
      * 获取list缓存的内容
      */
     public List<Object> lGet(String key, long start, long end) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null) {
-            return new ArrayList<>();
+        try {
+            if (redisTemplate == null) {
+                return new ArrayList<>();
+            }
+            return redisTemplate.opsForList().range(key, start, end);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
         }
-        
-        int size = list.size();
-        if (start < 0) start = Math.max(0, size + start);
-        if (end < 0) end = Math.max(0, size + end);
-        if (end >= size) end = size - 1;
-        
-        if (start > end || start >= size) {
-            return new ArrayList<>();
-        }
-        
-        return new ArrayList<>(list.subList((int) start, (int) end + 1));
     }
 
     /**
      * 获取list缓存的长度
      */
     public long lGetListSize(String key) {
-        List<Object> list = (List<Object>) get(key);
-        return list == null ? 0 : list.size();
+        try {
+            if (redisTemplate == null) {
+                return 0;
+            }
+            Long size = redisTemplate.opsForList().size(key);
+            return size == null ? 0 : size;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return 0;
+        }
     }
 
     /**
      * 通过索引获取list中的值
      */
     public Object lGetIndex(String key, long index) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null || index < 0 || index >= list.size()) {
+        try {
+            if (redisTemplate == null) {
+                return null;
+            }
+            return redisTemplate.opsForList().index(key, index);
+        } catch (Exception e) {
+            e.printStackTrace();
             return null;
         }
-        return list.get((int) index);
     }
 
     /**
      * 将list放入缓存
      */
     public boolean lSet(String key, Object value) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null) {
-            list = new ArrayList<>();
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForList().rightPush(key, value);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
-        list.add(value);
-        return set(key, list);
     }
 
     /**
      * 将list放入缓存并设置过期时间
      */
     public boolean lSet(String key, Object value, long time) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null) {
-            list = new ArrayList<>();
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForList().rightPush(key, value);
+            if (time > 0) {
+                redisTemplate.expire(key, time, TimeUnit.SECONDS);
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
-        list.add(value);
-        return set(key, list, time);
     }
 
     /**
      * 将list放入缓存
      */
     public boolean lSet(String key, List<Object> value) {
-        return set(key, value);
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForList().rightPushAll(key, value);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 将list放入缓存并设置过期时间
      */
     public boolean lSet(String key, List<Object> value, long time) {
-        return set(key, value, time);
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForList().rightPushAll(key, value);
+            if (time > 0) {
+                redisTemplate.expire(key, time, TimeUnit.SECONDS);
+            }
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     /**
      * 根据索引修改list
      */
     public boolean lUpdateIndex(String key, long index, Object value) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null || index < 0 || index >= list.size()) {
+        try {
+            if (redisTemplate == null) {
+                return false;
+            }
+            redisTemplate.opsForList().set(key, index, value);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
             return false;
         }
-        list.set((int) index, value);
-        return set(key, list);
     }
 
     /**
@@ -525,22 +632,15 @@ public class RedisService {
      * @return 移除的个数
      */
     public long lRemove(String key, long count, Object value) {
-        List<Object> list = (List<Object>) get(key);
-        if (list == null) {
+        try {
+            if (redisTemplate == null) {
+                return 0;
+            }
+            Long remove = redisTemplate.opsForList().remove(key, count, value);
+            return remove == null ? 0 : remove;
+        } catch (Exception e) {
+            e.printStackTrace();
             return 0;
         }
-        
-        long removeCount = 0;
-        Iterator<Object> iterator = list.iterator();
-        while (iterator.hasNext()) {
-            if (removeCount >= count) break;
-            if (Objects.equals(iterator.next(), value)) {
-                iterator.remove();
-                removeCount++;
-            }
-        }
-        
-        set(key, list);
-        return removeCount;
     }
 }
